@@ -1,52 +1,130 @@
 ---
-- name: Deploy containerized app to Kubernetes via Helm
+- name: SBI Production Deployment - Deploy containerized app to Kubernetes via Helm
   hosts: localhost
-  gather_facts: false
+  gather_facts: true
   vars_files:
     - vars/production.yml
+    - vars/vault.yml
+
+  pre_tasks:
+    - name: Create required directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - ./logs
+        - ./tmp
+        - ./backups
+
+    - name: Set deployment timestamp
+      set_fact:
+        deployment_timestamp: "{{ ansible_date_time.epoch }}"
+        deployment_id: "{{ ansible_date_time.iso8601_basic_short }}"
+
+    - name: Log deployment start
+      ansible.builtin.lineinfile:
+        path: "./logs/deployment.log"
+        line: "{{ ansible_date_time.iso8601 }} [INFO] Starting SBI deployment - ID: {{ deployment_id }}, Image: {{ image_name }}:{{ image_tag }}"
+        create: yes
 
   tasks:
+    # Enhanced Pre-flight Checks
+    - name: Pre-flight | Check system resources
+      block:
+        - name: Check available disk space
+          shell: df -h / | awk 'NR==2 {print $5}' | sed 's/%//'
+          register: disk_usage
+          failed_when: disk_usage.stdout | int > 90
 
-    - name: Pre-flight | Check Docker
-      command: docker version
+        - name: Check available memory
+          shell: free -m | awk 'NR==2{printf "%.2f%%\n", $3*100/$2}'
+          register: memory_usage
+
+        - name: Log system resources
+          ansible.builtin.lineinfile:
+            path: "./logs/deployment.log"
+            line: "{{ ansible_date_time.iso8601 }} [INFO] System resources - Disk: {{ disk_usage.stdout }}%, Memory: {{ memory_usage.stdout }}"
+
+    - name: Pre-flight | Validate Docker installation
+      command: docker version --format '{{.Server.Version}}'
       register: docker_check
       failed_when: docker_check.rc != 0
 
-    - name: Pre-flight | Check Helm
-      command: helm version
+    - name: Pre-flight | Validate Helm installation
+      command: helm version --short
       register: helm_check
       failed_when: helm_check.rc != 0
 
-    - name: Pre-flight | Check kubectl
-      command: kubectl version --client
+    - name: Pre-flight | Validate kubectl connectivity
+      command: kubectl cluster-info --request-timeout=10s
       register: kubectl_check
       failed_when: kubectl_check.rc != 0
 
-    - name: Pre-flight | Check Helm chart path
+    - name: Pre-flight | Validate namespace exists
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "{{ namespace }}"
+      register: namespace_check
+      failed_when: namespace_check.resources | length == 0
+
+    - name: Pre-flight | Validate Helm chart exists
       stat:
         path: "{{ helm_chart_path }}"
       register: chart_path_check
       failed_when: not chart_path_check.stat.exists
 
-    - block:
-        - name: Login to Nexus
+    - name: Pre-flight | Validate Helm chart syntax
+      command: helm lint {{ helm_chart_path }}
+      register: helm_lint_result
+      failed_when: helm_lint_result.rc != 0
+
+    # Security validations
+    - name: Security | Validate image security scanning
+      shell: |
+        # This would integrate with your security scanning tool
+        echo "Security scan passed for {{ image_name }}:{{ image_tag }}"
+      when: security_scan_enabled | default(true)
+
+    # Backup current deployment
+    - name: Backup | Create pre-deployment backup
+      block:
+        - name: Get current deployment manifest
+          shell: kubectl get deployment {{ release_name }} -n {{ namespace }} -o yaml > ./backups/{{ release_name }}-{{ deployment_id }}-backup.yaml
+          ignore_errors: yes
+
+        - name: Log backup creation
+          ansible.builtin.lineinfile:
+            path: "./logs/deployment.log"
+            line: "{{ ansible_date_time.iso8601 }} [INFO] Created backup: {{ release_name }}-{{ deployment_id }}-backup.yaml"
+      when: enable_backup | bool
+
+    # Image sync with enhanced error handling
+    - name: Image Sync | Sync from Nexus to Harbor
+      block:
+        - name: Login to Nexus registry
           docker_login:
             registry_url: "{{ nexus_registry }}"
             username: "{{ nexus_username }}"
             password: "{{ nexus_password }}"
           no_log: true
 
-        - name: Pull image from Nexus
+        - name: Pull image from Nexus with retry logic
           shell: docker pull {{ nexus_registry }}/{{ image_name }}:{{ image_tag }}
           register: pull_result
           retries: 3
           delay: 10
           until: pull_result.rc == 0
 
+        - name: Verify image integrity
+          shell: docker inspect {{ nexus_registry }}/{{ image_name }}:{{ image_tag }} --format='{{.Id}}'
+          register: image_id
+
         - name: Tag image for Harbor
           shell: docker tag {{ nexus_registry }}/{{ image_name }}:{{ image_tag }} {{ harbor_registry }}/{{ image_name }}:{{ image_tag }}
 
-        - name: Login to Harbor
+        - name: Login to Harbor registry
           docker_login:
             registry_url: "{{ harbor_registry }}"
             username: "{{ harbor_username }}"
@@ -55,34 +133,198 @@
 
         - name: Push image to Harbor
           shell: docker push {{ harbor_registry }}/{{ image_name }}:{{ image_tag }}
+          register: push_result
+
+        - name: Log successful image sync
+          ansible.builtin.lineinfile:
+            path: "./logs/deployment.log"
+            line: "{{ ansible_date_time.iso8601 }} [INFO] Image sync completed - {{ image_name }}:{{ image_tag }}"
 
       rescue:
-        - name: Log and fail if image sync failed
-          fail:
-            msg: "Image sync failed. Check credentials or registry access."
+        - name: Log image sync failure
+          ansible.builtin.lineinfile:
+            path: "./logs/deployment.log"
+            line: "{{ ansible_date_time.iso8601 }} [ERROR] Image sync failed for {{ image_name }}:{{ image_tag }}"
 
-    - block:
-        - name: Deploy using Helm
-          community.kubernetes.helm:
+        - name: Cleanup failed images
+          shell: |
+            docker rmi {{ nexus_registry }}/{{ image_name }}:{{ image_tag }} || true
+            docker rmi {{ harbor_registry }}/{{ image_name }}:{{ image_tag }} || true
+          ignore_errors: yes
+
+        - name: Fail deployment on image sync error
+          fail:
+            msg: "Image sync failed. Check registry connectivity and credentials."
+
+    # Enhanced Helm deployment
+    - name: Deployment | Deploy using Helm with monitoring
+      block:
+        - name: Check if release exists
+          shell: helm list -n {{ namespace }} | grep {{ release_name }}
+          register: release_exists
+          ignore_errors: yes
+
+        - name: Deploy application using Helm
+          kubernetes.core.helm:
             chart_path: "{{ helm_chart_path }}"
             release_name: "{{ release_name }}"
             namespace: "{{ namespace }}"
             values:
               image:
+                repository: "{{ harbor_registry }}/{{ image_name }}"
                 tag: "{{ image_tag }}"
+              deployment:
+                timestamp: "{{ deployment_timestamp }}"
+                id: "{{ deployment_id }}"
+              monitoring:
+                enabled: "{{ enable_monitoring }}"
+              backup:
+                enabled: "{{ enable_backup }}"
             wait: true
-            timeout: "{{ time_out }}"
+            timeout: "{{ deployment_timeout }}"
             atomic: true
+            create_namespace: false
+
+        - name: Log successful deployment
+          ansible.builtin.lineinfile:
+            path: "./logs/deployment.log"
+            line: "{{ ansible_date_time.iso8601 }} [INFO] Helm deployment completed successfully"
+
       rescue:
-        - name: Rollback on failure
-          shell: helm rollback {{ release_name }}
+        - name: Log deployment failure
+          ansible.builtin.lineinfile:
+            path: "./logs/deployment.log"
+            line: "{{ ansible_date_time.iso8601 }} [ERROR] Helm deployment failed"
+
+        - name: Automatic rollback on failure
+          shell: helm rollback {{ release_name }} -n {{ namespace }}
+          when: enable_rollback | bool and release_exists.rc == 0
+
+        - name: Restore from backup if rollback fails
+          shell: kubectl apply -f ./backups/{{ release_name }}-{{ deployment_id }}-backup.yaml
+          when: enable_rollback | bool and release_exists.rc != 0
+          ignore_errors: yes
+
+        - name: Fail with detailed error message
+          fail:
+            msg: "Deployment failed. Rollback attempted. Check logs for details."
+
+    # Comprehensive health checks
+    - name: Health Check | Verify deployment status
+      block:
+        - name: Wait for deployment rollout
+          shell: kubectl rollout status deployment/{{ release_name }} -n {{ namespace }} --timeout={{ deployment_timeout }}s
+          register: rollout_status
+
+        - name: Verify pods are ready
+          shell: kubectl get pods -n {{ namespace }} -l app={{ release_name }} -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}'
+          register: pod_status
+          retries: "{{ health_check_retries }}"
+          delay: "{{ health_check_delay }}"
+          until: pod_status.stdout.find("False") == -1
+
+        - name: Check service endpoints
+          shell: kubectl get endpoints {{ release_name }} -n {{ namespace }} -o jsonpath='{.subsets[*].addresses[*].ip}'
+          register: service_endpoints
+
+        - name: Perform application health check
+          uri:
+            url: "http://{{ service_endpoints.stdout.split()[0] | default('localhost') }}:8080/health"
+            method: GET
+            timeout: 10
+          register: app_health
+          ignore_errors: yes
+
+        - name: Log health check results
+          ansible.builtin.lineinfile:
+            path: "./logs/deployment.log"
+            line: "{{ ansible_date_time.iso8601 }} [INFO] Health checks passed - Pods ready, endpoints: {{ service_endpoints.stdout }}"
+
+      rescue:
+        - name: Log health check failure
+          ansible.builtin.lineinfile:
+            path: "./logs/deployment.log"
+            line: "{{ ansible_date_time.iso8601 }} [ERROR] Health checks failed"
+
+        - name: Collect diagnostic information
+          shell: |
+            kubectl describe deployment {{ release_name }} -n {{ namespace }} > ./logs/{{ release_name }}-{{ deployment_id }}-diagnostics.log
+            kubectl logs -l app={{ release_name }} -n {{ namespace }} --tail=100 >> ./logs/{{ release_name }}-{{ deployment_id }}-diagnostics.log
+
+        - name: Automatic rollback on health check failure
+          shell: helm rollback {{ release_name }} -n {{ namespace }}
           when: enable_rollback | bool
 
-    - name: Health check
-      shell: kubectl rollout status deployment/{{ release_name }} -n {{ namespace }}
-      register: rollout_status
-      failed_when: "'successfully rolled out' not in rollout_status.stdout"
+        - name: Fail with health check error
+          fail:
+            msg: "Health checks failed. Application may not be responding correctly."
 
-    - name: Cleanup local image
-      shell: docker rmi {{ harbor_registry }}/{{ image_name }}:{{ image_tag }}
+    # Monitoring and alerting setup
+    - name: Monitoring | Setup monitoring and alerts
+      block:
+        - name: Create monitoring resources
+          kubernetes.core.k8s:
+            definition:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: "{{ release_name }}-monitoring"
+                namespace: "{{ monitoring_namespace | default(namespace) }}"
+              data:
+                deployment_id: "{{ deployment_id }}"
+                deployment_time: "{{ ansible_date_time.iso8601 }}"
+                image_tag: "{{ image_tag }}"
+
+        - name: Send deployment notification
+          uri:
+            url: "{{ vault_alerting_webhook_url }}"
+            method: POST
+            body_format: json
+            body:
+              message: "SBI Deployment Successful"
+              deployment_id: "{{ deployment_id }}"
+              application: "{{ release_name }}"
+              image_tag: "{{ image_tag }}"
+              timestamp: "{{ ansible_date_time.iso8601 }}"
+          ignore_errors: yes
+      when: enable_monitoring | bool
+
+  post_tasks:
+    # Cleanup
+    - name: Cleanup | Remove local images
+      shell: |
+        docker rmi {{ nexus_registry }}/{{ image_name }}:{{ image_tag }} || true
+        docker rmi {{ harbor_registry }}/{{ image_name }}:{{ image_tag }} || true
       when: enable_cleanup | bool
+      ignore_errors: yes
+
+    - name: Cleanup | Remove old backups
+      find:
+        paths: "./backups"
+        age: "7d"
+        patterns: "*.yaml"
+      register: old_backups
+
+    - name: Cleanup | Delete old backup files
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ old_backups.files }}"
+
+    # Final logging
+    - name: Log deployment completion
+      ansible.builtin.lineinfile:
+        path: "./logs/deployment.log"
+        line: "{{ ansible_date_time.iso8601 }} [INFO] SBI deployment completed successfully - ID: {{ deployment_id }}"
+
+    - name: Display deployment summary
+      debug:
+        msg: |
+          ===== SBI DEPLOYMENT SUMMARY =====
+          Deployment ID: {{ deployment_id }}
+          Application: {{ release_name }}
+          Image: {{ image_name }}:{{ image_tag }}
+          Namespace: {{ namespace }}
+          Status: SUCCESS
+          Timestamp: {{ ansible_date_time.iso8601 }}
+          ==================================

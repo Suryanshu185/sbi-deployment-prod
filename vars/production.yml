@@ -1,8 +1,38 @@
-nexus_registry: "{{ lookup('env', 'NEXUS_REGISTRY') }}"
-harbor_registry: "{{ lookup('env', 'HARBOR_REGISTRY') }}"
-helm_chart_path: "{{ lookup('env', 'HELM_CHART_PATH') }}"
-release_name: "{{ lookup('env', 'RELEASE_NAME') }}"
-namespace: "{{ lookup('env', 'NAMESPACE') }}"
-time_out: "{{ lookup('env', 'TIMEOUT') | default(300, true) }}"
+# SBI Production Configuration
+# Registry Configuration
+nexus_registry: "nexus.sbi.co.in"
+harbor_registry: "harbor.sbi.co.in"
+
+# Deployment Configuration
+helm_chart_path: "{{ lookup('env', 'HELM_CHART_PATH') | default('./helm-charts/sbi-app', true) }}"
+release_name: "{{ lookup('env', 'RELEASE_NAME') | default('sbi-app', true) }}"
+namespace: "{{ lookup('env', 'NAMESPACE') | default('sbi-production', true) }}"
+image_name: "{{ lookup('env', 'IMAGE_NAME') | default('sbi-banking-app', true) }}"
+
+# Operational Configuration
+time_out: "{{ lookup('env', 'TIMEOUT') | default(600, true) }}"
 enable_rollback: "{{ lookup('env', 'ENABLE_ROLLBACK') | default('true', true) }}"
 enable_cleanup: "{{ lookup('env', 'ENABLE_CLEANUP') | default('true', true) }}"
+enable_monitoring: "{{ lookup('env', 'ENABLE_MONITORING') | default('true', true) }}"
+enable_backup: "{{ lookup('env', 'ENABLE_BACKUP') | default('true', true) }}"
+
+# Security Configuration
+nexus_username: "{{ vault_nexus_username }}"
+nexus_password: "{{ vault_nexus_password }}"
+harbor_username: "{{ vault_harbor_username }}"
+harbor_password: "{{ vault_harbor_password }}"
+
+# Health Check Configuration
+health_check_retries: 5
+health_check_delay: 30
+deployment_timeout: 1200
+
+# Monitoring Configuration
+monitoring_namespace: "sbi-monitoring"
+alerts_enabled: true
+metrics_retention: "30d"
+
+# Backup Configuration
+backup_enabled: true
+backup_retention: "90d"
+backup_schedule: "0 2 * * *"  # Daily at 2 AM

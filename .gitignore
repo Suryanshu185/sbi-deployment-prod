@@ -1,0 +1,105 @@
+# SBI Production Deployment - Git Ignore File
+
+# Sensitive files
+.vault_pass
+*.pem
+*.key
+*.crt
+**/secrets/**
+**/credentials/**
+
+# Logs
+logs/
+*.log
+*.log.*
+
+# Temporary files
+tmp/
+.tmp/
+*.tmp
+.env_setup_done
+deployment.lock
+
+# Backups (contain sensitive data)
+backups/
+*.backup
+*.bak
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.vim/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Ansible
+*.retry
+.vault_password
+vault_password_file
+
+# Kubernetes
+kubeconfig
+*.kubeconfig
+
+# Docker
+.dockerignore
+
+# Terraform (if used)
+*.tfstate
+*.tfstate.*
+.terraform/
+*.tfvars
+
+# Test files
+test-results/
+coverage/
+*.coverage
+
+# Build artifacts
+dist/
+build/
+target/
+*.jar
+*.war
+*.ear
+
+# Cache directories
+.cache/
+.npm/
+.yarn/
+
+# Temporary configuration files
+config.local.*
+.env.local
+.env.production.local
+
+# IDE and editor directories
+.vscode/
+.idea/
+*.sublime-*
