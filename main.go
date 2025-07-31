@@ -20,6 +20,7 @@ func main() {
 		showVersion  = flag.Bool("version", false, "Show version")
 		setupEnv     = flag.Bool("setup", false, "Run environment setup")
 		verbose      = flag.Bool("verbose", false, "Enable verbose logging")
+		dryRun       = flag.Bool("dry-run", false, "Show what would be done without executing")
 	)
 	flag.Parse()
 
@@ -38,7 +39,7 @@ func main() {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	deployer := deploy.New(cfg, *verbose)
+	deployer := deploy.New(cfg, *verbose, *dryRun)
 
 	if *setupEnv {
 		log.Println("Setting up environment...")

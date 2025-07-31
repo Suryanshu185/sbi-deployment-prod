@@ -16,6 +16,23 @@ error_exit() {
   exit 1
 }
 
+show_usage() {
+  echo "Usage: $0 [IMAGE_TAG] [OPTIONS]"
+  echo ""
+  echo "Arguments:"
+  echo "  IMAGE_TAG     Image tag to deploy (default: latest)"
+  echo ""
+  echo "Options:"
+  echo "  --dry-run     Show what would be done without executing"
+  echo "  --setup-only  Run environment setup only"
+  echo ""
+  echo "Examples:"
+  echo "  $0 v1.2.3                    # Deploy version v1.2.3"
+  echo "  $0 v1.2.3 --dry-run          # Dry run for v1.2.3"
+  echo "  $0 --setup-only               # Setup environment only"
+  echo ""
+}
+
 build_cli() {
   if [ ! -f "$CLI_BINARY" ] || [ "main.go" -nt "$CLI_BINARY" ]; then
     log "Building Go CLI..."
@@ -27,18 +44,53 @@ validate_config() {
   [ -f "$CONFIG_FILE" ] || error_exit "Configuration file $CONFIG_FILE not found."
 }
 
+# Parse arguments
+IMAGE_TAG="latest"
+DRY_RUN=""
+SETUP_ONLY=""
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --dry-run)
+      DRY_RUN="--dry-run"
+      shift
+      ;;
+    --setup-only)
+      SETUP_ONLY="true"
+      shift
+      ;;
+    --help|-h)
+      show_usage
+      exit 0
+      ;;
+    -*)
+      echo "Unknown option: $1"
+      show_usage
+      exit 1
+      ;;
+    *)
+      IMAGE_TAG="$1"
+      shift
+      ;;
+  esac
+done
+
 # Check if environment setup is needed
-if [ ! -f ".env_setup_done" ]; then
+if [ ! -f ".env_setup_done" ] || [ -n "$SETUP_ONLY" ]; then
   log "Running environment setup..."
   build_cli
   "$CLI_BINARY" --setup || error_exit "Environment setup failed"
   touch .env_setup_done
+  
+  if [ -n "$SETUP_ONLY" ]; then
+    log "Environment setup completed. Exiting as requested."
+    exit 0
+  fi
 fi
 
 build_cli
 validate_config
 
-IMAGE_TAG="${1:-latest}"
 log "Starting deployment for image tag: $IMAGE_TAG"
 
 # Export credentials as environment variables if provided
@@ -51,6 +103,6 @@ else
 fi
 
 # Run deployment with the Go CLI
-"$CLI_BINARY" --tag="$IMAGE_TAG" --config="$CONFIG_FILE" --verbose | tee -a "$LOG_FILE"
+"$CLI_BINARY" --tag="$IMAGE_TAG" --config="$CONFIG_FILE" --verbose $DRY_RUN | tee -a "$LOG_FILE"
 
 log "Deployment script completed"

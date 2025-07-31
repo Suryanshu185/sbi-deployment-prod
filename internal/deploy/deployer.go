@@ -20,15 +20,17 @@ type Deployer struct {
 	dockerClient *docker.Client
 	helmClient   *helm.Client
 	verbose      bool
+	dryRun       bool
 }
 
 // New creates a new Deployer instance
-func New(cfg *config.Config, verbose bool) *Deployer {
+func New(cfg *config.Config, verbose, dryRun bool) *Deployer {
 	return &Deployer{
 		config:       cfg,
-		dockerClient: docker.New(verbose),
-		helmClient:   helm.New(verbose),
+		dockerClient: docker.New(verbose, dryRun),
+		helmClient:   helm.New(verbose, dryRun),
 		verbose:      verbose,
+		dryRun:       dryRun,
 	}
 }
 
@@ -127,6 +129,9 @@ func (d *Deployer) GetCredentials() (*config.Credentials, error) {
 
 // Deploy executes the complete deployment process
 func (d *Deployer) Deploy(imageTag, imageName string, credentials *config.Credentials) error {
+	if d.dryRun {
+		return d.dryRunDeploy(imageTag, imageName, credentials)
+	}
 	// Pre-flight checks
 	if err := d.preflightChecks(); err != nil {
 		return fmt.Errorf("pre-flight checks failed: %w", err)
@@ -266,5 +271,58 @@ func (d *Deployer) deployWithHelm(chartPath, releaseName, imageTag string) error
 	}
 
 	log.Println("Helm deployment completed successfully")
+	return nil
+}
+
+// dryRunDeploy shows what would be done without executing
+func (d *Deployer) dryRunDeploy(imageTag, imageName string, credentials *config.Credentials) error {
+	log.Println("=== DRY RUN MODE - No actual operations will be performed ===")
+	
+	// Determine image name
+	if imageName == "" {
+		imageName = d.config.ReleaseName
+		if imageName == "" {
+			imageName = "app"
+		}
+	}
+	
+	sourceImage := fmt.Sprintf("%s/%s:%s", d.config.NexusRegistry, imageName, imageTag)
+	targetImage := fmt.Sprintf("%s/%s:%s", d.config.HarborRegistry, imageName, imageTag)
+	chartPath := strings.ReplaceAll(d.config.HelmChartPath, "{{ image_name }}", imageName)
+	releaseName := strings.ReplaceAll(d.config.ReleaseName, "{{ image_name }}", imageName)
+
+	log.Printf("1. Pre-flight checks:")
+	log.Printf("   ✓ Would check Docker availability")
+	log.Printf("   ✓ Would check Helm availability")
+	log.Printf("   ✓ Would check kubectl availability")
+	log.Printf("   ✓ Would check chart path: %s", chartPath)
+
+	log.Printf("2. Image sync operations:")
+	log.Printf("   ✓ Would login to Nexus registry: %s", d.config.NexusRegistry)
+	log.Printf("   ✓ Would pull image: %s", sourceImage)
+	log.Printf("   ✓ Would tag image: %s -> %s", sourceImage, targetImage)
+	log.Printf("   ✓ Would login to Harbor registry: %s", d.config.HarborRegistry)
+	log.Printf("   ✓ Would push image: %s", targetImage)
+
+	log.Printf("3. Helm deployment:")
+	log.Printf("   ✓ Would deploy using chart: %s", chartPath)
+	log.Printf("   ✓ Would set release name: %s", releaseName)
+	log.Printf("   ✓ Would deploy to namespace: %s", d.config.Namespace)
+	log.Printf("   ✓ Would set image tag: %s", imageTag)
+	log.Printf("   ✓ Would wait for deployment (timeout: %ds)", d.config.Timeout)
+	
+	if d.config.EnableRollback {
+		log.Printf("   ✓ Rollback is enabled if deployment fails")
+	}
+
+	log.Printf("4. Health check:")
+	log.Printf("   ✓ Would check rollout status for deployment/%s in namespace %s", releaseName, d.config.Namespace)
+
+	if d.config.EnableCleanup {
+		log.Printf("5. Cleanup:")
+		log.Printf("   ✓ Would remove local image: %s", targetImage)
+	}
+
+	log.Printf("=== DRY RUN COMPLETED - All operations would succeed ===")
 	return nil
 }

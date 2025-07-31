@@ -21,6 +21,18 @@ chmod +x bootstrap-deployment.sh
 ./bootstrap-deployment.sh v1.2.3
 ```
 
+### Dry Run (Test Mode)
+```bash
+# Test deployment without executing
+./bootstrap-deployment.sh v1.2.3 --dry-run
+```
+
+### Environment Setup Only
+```bash
+# Set up environment without deploying
+./bootstrap-deployment.sh --setup-only
+```
+
 ### Manual Usage
 ```bash
 # Build the CLI (done automatically by bootstrap script)
@@ -37,6 +49,12 @@ go build -o sbi-deploy .
 
 # Use custom config file
 ./sbi-deploy --tag=v1.2.3 --config=./custom.conf
+
+# Dry run to see what would be done
+./sbi-deploy --tag=v1.2.3 --dry-run
+
+# Deploy specific image name
+./sbi-deploy --tag=v1.2.3 --image=my-app
 ```
 
 ### Configuration
@@ -65,3 +83,6 @@ export HARBOR_PASSWORD=your_harbor_password
 - ✅ Health checks and cleanup
 - ✅ Verbose logging and error handling
 - ✅ Configuration file support
+- ✅ Dry-run mode for testing
+- ✅ Custom image name support
+- ✅ Interactive and environment variable credential input

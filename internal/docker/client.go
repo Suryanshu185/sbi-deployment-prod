@@ -9,11 +9,15 @@ import (
 // Client represents a Docker client
 type Client struct {
 	verbose bool
+	dryRun  bool
 }
 
 // New creates a new Docker client
-func New(verbose bool) *Client {
-	return &Client{verbose: verbose}
+func New(verbose, dryRun bool) *Client {
+	return &Client{
+		verbose: verbose,
+		dryRun:  dryRun,
+	}
 }
 
 // CheckDocker verifies that Docker is available and running
