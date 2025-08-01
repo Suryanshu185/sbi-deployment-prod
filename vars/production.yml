@@ -1,8 +1,0 @@
-nexus_registry: "{{ lookup('env', 'NEXUS_REGISTRY') }}"
-harbor_registry: "{{ lookup('env', 'HARBOR_REGISTRY') }}"
-helm_chart_path: "{{ lookup('env', 'HELM_CHART_PATH') }}"
-release_name: "{{ lookup('env', 'RELEASE_NAME') }}"
-namespace: "{{ lookup('env', 'NAMESPACE') }}"
-time_out: "{{ lookup('env', 'TIMEOUT') | default(300, true) }}"
-enable_rollback: "{{ lookup('env', 'ENABLE_ROLLBACK') | default('true', true) }}"
-enable_cleanup: "{{ lookup('env', 'ENABLE_CLEANUP') | default('true', true) }}"
